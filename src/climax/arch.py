@@ -47,6 +47,7 @@ class ClimaX(nn.Module):
         drop_path=0.1,
         drop_rate=0.1,
         parallel_patch_embed=False,
+        lead_time=None,
     ):
         super().__init__()
 
@@ -83,7 +84,7 @@ class ClimaX(nn.Module):
             torch.zeros(1, self.num_patches, embed_dim), requires_grad=True
         )
         self.lead_time_embed = nn.Linear(1, embed_dim)
-
+        self.lead_time = lead_time
         # --------------------------------------------------------------------------
 
         # ViT backbone
@@ -265,10 +266,9 @@ class ClimaX(nn.Module):
             loss (list): Different metrics.
             preds (torch.Tensor): `[B, Vo, H, W]` shape. Predicted weather/climate variables.
         """
-
-        lead_times = torch.tensor([self.lead_time for _ in range(len(lead_times))]).to(
-            x.device
-        )
+        lead_times = torch.FloatTensor(
+            [self.lead_time for _ in range(len(lead_times))]
+        ).to(x.device)
         out_transformers = self.forward_encoder(x, lead_times, variables)  # B, L, D
         preds = self.head(out_transformers)  # B, L, V*p*p
 
