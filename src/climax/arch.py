@@ -47,6 +47,7 @@ class ClimaX(nn.Module):
         drop_path=0.1,
         drop_rate=0.1,
         parallel_patch_embed=False,
+        lead_time=None,
     ):
         super().__init__()
 
@@ -73,14 +74,10 @@ class ClimaX(nn.Module):
         # variable embedding to denote which variable each token belongs to
         # helps in aggregating variables
         self.var_embed, self.var_map = self.create_var_embedding(embed_dim)
-
+        self.lead_time = lead_time
         # variable aggregation: a learnable query and a single-layer cross attention
-        self.var_query = nn.Parameter(
-            torch.zeros(1, 1, embed_dim), requires_grad=True
-        )
-        self.var_agg = nn.MultiheadAttention(
-            embed_dim, num_heads, batch_first=True
-        )
+        self.var_query = nn.Parameter(torch.zeros(1, 1, embed_dim), requires_grad=True)
+        self.var_agg = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
 
         # positional embedding and lead time embedding
         self.pos_embed = nn.Parameter(
@@ -118,9 +115,7 @@ class ClimaX(nn.Module):
         for _ in range(decoder_depth):
             self.head.append(nn.Linear(embed_dim, embed_dim))
             self.head.append(nn.GELU())
-        self.head.append(
-            nn.Linear(embed_dim, len(self.default_vars) * patch_size**2)
-        )
+        self.head.append(nn.Linear(embed_dim, len(self.default_vars) * patch_size**2))
         self.head = nn.Sequential(*self.head)
 
         # --------------------------------------------------------------------------
@@ -135,16 +130,12 @@ class ClimaX(nn.Module):
             int(self.img_size[1] / self.patch_size),
             cls_token=False,
         )
-        self.pos_embed.data.copy_(
-            torch.from_numpy(pos_embed).float().unsqueeze(0)
-        )
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         var_embed = get_1d_sincos_pos_embed_from_grid(
             self.var_embed.shape[-1], np.arange(len(self.default_vars))
         )
-        self.var_embed.data.copy_(
-            torch.from_numpy(var_embed).float().unsqueeze(0)
-        )
+        self.var_embed.data.copy_(torch.from_numpy(var_embed).float().unsqueeze(0))
 
         # token embedding layer
         if self.parallel_patch_embed:
@@ -221,9 +212,7 @@ class ClimaX(nn.Module):
         x = x.unflatten(dim=0, sizes=(b, l))  # B, L, D
         return x
 
-    def forward_encoder(
-        self, x: torch.Tensor, lead_times: torch.Tensor, variables
-    ):
+    def forward_encoder(self, x: torch.Tensor, lead_times: torch.Tensor, variables):
         # x: `[B, V, H, W]` shape.
 
         if isinstance(variables, list):
@@ -251,7 +240,10 @@ class ClimaX(nn.Module):
         # add pos embedding
         x = x + self.pos_embed
 
-        # add lead time embedding
+        # add lead time embedding using self.lead_time
+        lead_times = torch.Tensor([self.lead_time for _ in range(len(lead_times))]).to(
+            x.device
+        )
         lead_time_emb = self.lead_time_embed(lead_times.unsqueeze(-1))  # B, D
         lead_time_emb = lead_time_emb.unsqueeze(1)
         x = x + lead_time_emb  # B, L, D
@@ -278,9 +270,7 @@ class ClimaX(nn.Module):
             preds (torch.Tensor): `[B, Vo, H, W]` shape. Predicted weather/climate variables.
         """
         lead_times = lead_times.to(x.device)
-        out_transformers = self.forward_encoder(
-            x, lead_times, variables
-        )  # B, L, D
+        out_transformers = self.forward_encoder(x, lead_times, variables)  # B, L, D
         preds = self.head(out_transformers)  # B, L, V*p*p
 
         preds = self.unpatchify(preds)
@@ -303,9 +293,7 @@ class ClimaX(nn.Module):
         metrics,
         lat,
     ):
-        _, preds = self.forward(
-            x, y, lead_times, variables, metric=None, lat=lat
-        )
+        _, preds = self.forward(x, y, lead_times, variables, metric=None, lat=lat)
 
         return [
             m(
