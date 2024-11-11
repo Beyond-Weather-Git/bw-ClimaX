@@ -41,6 +41,7 @@ class ClimaXPH(ClimaX):
         drop_path=0.1,
         drop_rate=0.1,
         parallel_patch_embed=False,
+        lead_time=None,
     ):
         super().__init__(
             default_vars=default_vars,
@@ -63,8 +64,6 @@ class ClimaXPH(ClimaX):
             self.head.append(nn.GELU())
         self.head.append(nn.Linear(embed_dim, 1))  # Output dimension is 1
         self.head = nn.Sequential(*self.head)
-
-        # Re-initialize the weights of the new head
         self.apply(self._init_weights)
 
     def forward(self, x, y, lead_times, variables, metric, lat):
@@ -83,6 +82,7 @@ class ClimaXPH(ClimaX):
             loss (list): Computed loss values.
             preds (torch.Tensor): Predictions of shape `[B]`.
         """
+
         lead_times = lead_times.to(x.device)
         out_transformers = self.forward_encoder(
             x, lead_times, variables
@@ -97,6 +97,7 @@ class ClimaXPH(ClimaX):
         if metric is None:
             loss = None
         else:
+
             loss = [m(preds, y, variables, lat) for m in metric]
 
         return loss, preds
