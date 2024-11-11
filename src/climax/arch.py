@@ -57,11 +57,16 @@ class ClimaX(nn.Module):
         self.parallel_patch_embed = parallel_patch_embed
         # variable tokenization: separate embedding layer for each input variable
         if self.parallel_patch_embed:
-            self.token_embeds = ParallelVarPatchEmbed(len(default_vars), img_size, patch_size, embed_dim)
+            self.token_embeds = ParallelVarPatchEmbed(
+                len(default_vars), img_size, patch_size, embed_dim
+            )
             self.num_patches = self.token_embeds.num_patches
         else:
             self.token_embeds = nn.ModuleList(
-                [PatchEmbed(img_size, patch_size, 1, embed_dim) for i in range(len(default_vars))]
+                [
+                    PatchEmbed(img_size, patch_size, 1, embed_dim)
+                    for i in range(len(default_vars))
+                ]
             )
             self.num_patches = self.token_embeds[0].num_patches
 
@@ -70,18 +75,26 @@ class ClimaX(nn.Module):
         self.var_embed, self.var_map = self.create_var_embedding(embed_dim)
 
         # variable aggregation: a learnable query and a single-layer cross attention
-        self.var_query = nn.Parameter(torch.zeros(1, 1, embed_dim), requires_grad=True)
-        self.var_agg = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.var_query = nn.Parameter(
+            torch.zeros(1, 1, embed_dim), requires_grad=True
+        )
+        self.var_agg = nn.MultiheadAttention(
+            embed_dim, num_heads, batch_first=True
+        )
 
         # positional embedding and lead time embedding
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim), requires_grad=True)
+        self.pos_embed = nn.Parameter(
+            torch.zeros(1, self.num_patches, embed_dim), requires_grad=True
+        )
         self.lead_time_embed = nn.Linear(1, embed_dim)
 
         # --------------------------------------------------------------------------
 
         # ViT backbone
         self.pos_drop = nn.Dropout(p=drop_rate)
-        dpr = [x.item() for x in torch.linspace(0, drop_path, depth)]  # stochastic depth decay rule
+        dpr = [
+            x.item() for x in torch.linspace(0, drop_path, depth)
+        ]  # stochastic depth decay rule
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -105,7 +118,9 @@ class ClimaX(nn.Module):
         for _ in range(decoder_depth):
             self.head.append(nn.Linear(embed_dim, embed_dim))
             self.head.append(nn.GELU())
-        self.head.append(nn.Linear(embed_dim, len(self.default_vars) * patch_size**2))
+        self.head.append(
+            nn.Linear(embed_dim, len(self.default_vars) * patch_size**2)
+        )
         self.head = nn.Sequential(*self.head)
 
         # --------------------------------------------------------------------------
@@ -120,10 +135,16 @@ class ClimaX(nn.Module):
             int(self.img_size[1] / self.patch_size),
             cls_token=False,
         )
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        self.pos_embed.data.copy_(
+            torch.from_numpy(pos_embed).float().unsqueeze(0)
+        )
 
-        var_embed = get_1d_sincos_pos_embed_from_grid(self.var_embed.shape[-1], np.arange(len(self.default_vars)))
-        self.var_embed.data.copy_(torch.from_numpy(var_embed).float().unsqueeze(0))
+        var_embed = get_1d_sincos_pos_embed_from_grid(
+            self.var_embed.shape[-1], np.arange(len(self.default_vars))
+        )
+        self.var_embed.data.copy_(
+            torch.from_numpy(var_embed).float().unsqueeze(0)
+        )
 
         # token embedding layer
         if self.parallel_patch_embed:
@@ -148,11 +169,14 @@ class ClimaX(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def create_var_embedding(self, dim):
-        var_embed = nn.Parameter(torch.zeros(1, len(self.default_vars), dim), requires_grad=True)
+        var_embed = nn.Parameter(
+            torch.zeros(1, len(self.default_vars), dim), requires_grad=True
+        )
         # TODO: create a mapping from var --> idx
         var_map = {}
         idx = 0
         for var in self.default_vars:
+            print(var)
             var_map[var] = idx
             idx += 1
         return var_embed, var_map
@@ -197,7 +221,9 @@ class ClimaX(nn.Module):
         x = x.unflatten(dim=0, sizes=(b, l))  # B, L, D
         return x
 
-    def forward_encoder(self, x: torch.Tensor, lead_times: torch.Tensor, variables):
+    def forward_encoder(
+        self, x: torch.Tensor, lead_times: torch.Tensor, variables
+    ):
         # x: `[B, V, H, W]` shape.
 
         if isinstance(variables, list):
@@ -239,7 +265,7 @@ class ClimaX(nn.Module):
 
         return x
 
-    def forward(self, x, y, lead_times, variables, out_variables, metric, lat):
+    def forward(self, x, y, lead_times, variables, metric, lat):
         """Forward pass through the model.
 
         Args:
@@ -251,20 +277,42 @@ class ClimaX(nn.Module):
             loss (list): Different metrics.
             preds (torch.Tensor): `[B, Vo, H, W]` shape. Predicted weather/climate variables.
         """
-        out_transformers = self.forward_encoder(x, lead_times, variables)  # B, L, D
+        lead_times = lead_times.to(x.device)
+        out_transformers = self.forward_encoder(
+            x, lead_times, variables
+        )  # B, L, D
         preds = self.head(out_transformers)  # B, L, V*p*p
 
         preds = self.unpatchify(preds)
-        out_var_ids = self.get_var_ids(tuple(out_variables), preds.device)
+        out_var_ids = self.get_var_ids(tuple(variables), preds.device)
         preds = preds[:, out_var_ids]
 
         if metric is None:
             loss = None
         else:
-            loss = [m(preds, y, out_variables, lat) for m in metric]
+            loss = [m(preds, y, variables, lat) for m in metric]
 
         return loss, preds
 
-    def evaluate(self, x, y, lead_times, variables, out_variables, transform, metrics, lat, clim, log_postfix):
-        _, preds = self.forward(x, y, lead_times, variables, out_variables, metric=None, lat=lat)
-        return [m(preds, y, transform, out_variables, lat, clim, log_postfix) for m in metrics]
+    def evaluate(
+        self,
+        x,
+        y,
+        lead_times,
+        variables,
+        metrics,
+        lat,
+    ):
+        _, preds = self.forward(
+            x, y, lead_times, variables, metric=None, lat=lat
+        )
+
+        return [
+            m(
+                preds,
+                y,
+                variables,
+                lat,
+            )
+            for m in metrics
+        ]
