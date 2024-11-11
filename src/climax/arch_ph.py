@@ -264,9 +264,9 @@ class ClimaXPH(nn.Module):
         lat,
     ):
         # x: `[B, V, H, W]` shape.
-        lead_times = torch.tensor([self.lead_time for _ in range(len(lead_times))]).to(
-            x.device
-        )
+        lead_times = torch.FloatTensor(
+            [self.lead_time for _ in range(len(lead_times))]
+        ).to(x.device)
         out_transformers = self.forward_encoder(x, lead_times, variables)  # B, L, D
         x = self.norm(out_transformers)  # B, L, D
 
