@@ -285,7 +285,6 @@ class ClimaXPH(nn.Module):
         preds = self.head(x)  # B, 1
 
         preds = preds.squeeze(-1)  # B
-
         if metric is None:
             loss = None
         else:
