@@ -47,6 +47,7 @@ class ClimaXPH(nn.Module):
         drop_path=0.1,
         drop_rate=0.1,
         parallel_patch_embed=False,
+        lead_time=None,
     ):
         super().__init__()
 
@@ -73,14 +74,11 @@ class ClimaXPH(nn.Module):
         # variable embedding to denote which variable each token belongs to
         # helps in aggregating variables
         self.var_embed, self.var_map = self.create_var_embedding(embed_dim)
+        self.lead_time = lead_time
 
         # variable aggregation: a learnable query and a single-layer cross attention
-        self.var_query = nn.Parameter(
-            torch.zeros(1, 1, embed_dim), requires_grad=True
-        )
-        self.var_agg = nn.MultiheadAttention(
-            embed_dim, num_heads, batch_first=True
-        )
+        self.var_query = nn.Parameter(torch.zeros(1, 1, embed_dim), requires_grad=True)
+        self.var_agg = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
 
         # positional embedding and lead time embedding
         self.pos_embed = nn.Parameter(
@@ -132,16 +130,12 @@ class ClimaXPH(nn.Module):
             int(self.img_size[1] / self.patch_size),
             cls_token=False,
         )
-        self.pos_embed.data.copy_(
-            torch.from_numpy(pos_embed).float().unsqueeze(0)
-        )
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         var_embed = get_1d_sincos_pos_embed_from_grid(
             self.var_embed.shape[-1], np.arange(len(self.default_vars))
         )
-        self.var_embed.data.copy_(
-            torch.from_numpy(var_embed).float().unsqueeze(0)
-        )
+        self.var_embed.data.copy_(torch.from_numpy(var_embed).float().unsqueeze(0))
 
         # token embedding layer
         if self.parallel_patch_embed:
@@ -217,9 +211,7 @@ class ClimaXPH(nn.Module):
         x = x.unflatten(dim=0, sizes=(b, l))  # B, L, D
         return x
 
-    def forward_encoder(
-        self, x: torch.Tensor, lead_times: torch.Tensor, variables
-    ):
+    def forward_encoder(self, x: torch.Tensor, lead_times: torch.Tensor, variables):
         # x: `[B, V, H, W]` shape.
 
         if isinstance(variables, list):
@@ -272,10 +264,10 @@ class ClimaXPH(nn.Module):
         lat,
     ):
         # x: `[B, V, H, W]` shape.
-
-        out_transformers = self.forward_encoder(
-            x, lead_times, variables
-        )  # B, L, D
+        lead_times = torch.tensor([self.lead_time for _ in range(len(lead_times))]).to(
+            x.device
+        )
+        out_transformers = self.forward_encoder(x, lead_times, variables)  # B, L, D
         x = self.norm(out_transformers)  # B, L, D
 
         # Pool over sequence length
@@ -288,7 +280,6 @@ class ClimaXPH(nn.Module):
         if metric is None:
             loss = None
         else:
-
             loss = [
                 m(
                     preds,
@@ -315,6 +306,4 @@ class ClimaXPH(nn.Module):
         _, preds = self.forward(
             x, y, lead_times, variables, out_variables, metric=None, lat=lat
         )
-        return [
-            m(preds, y, transform, lat, clim, log_postfix) for m in metrics
-        ]
+        return [m(preds, y, transform, lat, clim, log_postfix) for m in metrics]
