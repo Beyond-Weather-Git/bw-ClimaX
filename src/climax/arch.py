@@ -177,7 +177,6 @@ class ClimaX(nn.Module):
         var_map = {}
         idx = 0
         for var in self.default_vars:
-            print(var)
             var_map[var] = idx
             idx += 1
         return var_embed, var_map
@@ -253,9 +252,8 @@ class ClimaX(nn.Module):
         x = x + self.pos_embed
 
         # add lead time embedding using self.lead_time
-        lead_times = torch.Tensor(
-            [self.lead_time for _ in range(len(lead_times))]
-        ).to(x.device)
+        # breakpoint()
+        lead_times = lead_times.to(x.device)
         lead_time_emb = self.lead_time_embed(lead_times.unsqueeze(-1))  # B, D
         lead_time_emb = lead_time_emb.unsqueeze(1)
         x = x + lead_time_emb  # B, L, D
@@ -322,4 +320,4 @@ class ClimaX(nn.Module):
                 lat,
             )
             for m in metrics
-        ]
+        ], preds

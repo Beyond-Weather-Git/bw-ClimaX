@@ -93,7 +93,7 @@ class ClimaXPH(ClimaX):
 
         # Pass through the prediction head
         preds = self.head(x).squeeze(-1)  # B
-        print(y)
+
         if metric is None:
             loss = None
         else:
