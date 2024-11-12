@@ -267,7 +267,14 @@ class ClimaX(nn.Module):
 
         return x
 
-    def forward(self, x, y, lead_times, variables, metric, lat):
+    def construct_lead_time_tensor(self, x):
+
+        lead_times = torch.FloatTensor(
+            [self.lead_time for _ in range(x.shape[0])]
+        ).to(x.device)
+        return lead_times
+
+    def forward(self, x, y, variables):
         """Forward pass through the model.
 
         Args:
@@ -276,13 +283,10 @@ class ClimaX(nn.Module):
             lead_times: `[B]` shape. Forecasting lead times of each element of the batch.
 
         Returns:
-            loss (list): Different metrics.
             preds (torch.Tensor): `[B, Vo, H, W]` shape. Predicted weather/climate variables.
         """
 
-        lead_times = torch.FloatTensor(
-            [self.lead_time for _ in range(len(lead_times))]
-        ).to(x.device)
+        lead_times = self.construct_lead_time_tensor(x)
         out_transformers = self.forward_encoder(
             x, lead_times, variables
         )  # B, L, D
@@ -292,32 +296,4 @@ class ClimaX(nn.Module):
         out_var_ids = self.get_var_ids(tuple(variables), preds.device)
         preds = preds[:, out_var_ids]
 
-        if metric is None:
-            loss = None
-        else:
-            loss = [m(preds, y, variables, lat) for m in metric]
-
-        return loss, preds
-
-    def evaluate(
-        self,
-        x,
-        y,
-        lead_times,
-        variables,
-        metrics,
-        lat,
-    ):
-        _, preds = self.forward(
-            x, y, lead_times, variables, metric=None, lat=lat
-        )
-
-        return [
-            m(
-                preds,
-                y,
-                variables,
-                lat,
-            )
-            for m in metrics
-        ], preds
+        return preds
