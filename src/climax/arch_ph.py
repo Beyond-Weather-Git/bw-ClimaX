@@ -59,7 +59,7 @@ class ClimaXPH(ClimaX):
 
         # Redefine the prediction head to output a single value
         # self.head = nn.ModuleList()
-        reduced_dim = 2
+        reduced_dim = 4
         self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
         unrolled_dim = self.num_patches * reduced_dim
         self.head = nn.Sequential(
