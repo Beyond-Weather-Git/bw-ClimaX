@@ -62,20 +62,14 @@ class ClimaXPH(ClimaX):
         reduced_dim = 4
         self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
         unrolled_dim = self.num_patches * reduced_dim
-        self.head = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.GELU(),
-            nn.Linear(embed_dim, embed_dim),
-            nn.GELU(),
-        )
         self.predictive_head = nn.Sequential(
-            nn.GELU(),
             nn.Linear(unrolled_dim, unrolled_dim // 2),
             nn.GELU(),
             nn.Linear(unrolled_dim // 2, unrolled_dim // 4),
             nn.GELU(),
             nn.Linear(unrolled_dim // 4, 1),
         )
+
         # for _ in range(decoder_depth):
         #     self.head.append(nn.Linear(embed_dim, embed_dim))
         #     self.head.append(nn.GELU()
@@ -107,8 +101,7 @@ class ClimaXPH(ClimaX):
 
         # Pool over sequence length
         # x = out_transformers.mean(dim=1)  # B, D
-        transformed_latent_repr = self.head(out_transformers)
-        reduced = self.dim_reduce(transformed_latent_repr)  # B, L, reduced_dim
+        reduced = self.dim_reduce(out_transformers)  # B, L, reduced_dim
 
         # Unroll
         unrolled = reduced.reshape(reduced.shape[0], -1)  # B, L*reduced_dim
