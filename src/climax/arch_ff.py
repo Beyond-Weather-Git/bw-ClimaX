@@ -96,10 +96,6 @@ class ClimaXFF(ClimaX):
 
         # Pool over sequence length
         # x = out_transformers.mean(dim=1)  # B, D
-        reduced = self.dim_reduce(out_transformers)  # B, L, reduced_dim
-
-        # Unroll
-        unrolled = reduced.reshape(reduced.shape[0], -1)  # B, L*reduced_dim
         # Pass through the head
         preds = self.spatial_head(out_transformers)  # B, L, V*p*p
 
