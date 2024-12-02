@@ -68,39 +68,22 @@ class ClimaXFF(ClimaX):
             head.append(nn.Linear(embed_dim, embed_dim))
             head.append(nn.GELU())
         head.append(nn.Linear(embed_dim, patch_size**2))
-        self.spatial_head = nn.Sequential(*self.head)
+        self.spatial_head = nn.Sequential(*head)
         self.apply(self._init_weights)
         self.lead_time = lead_time
 
     def forward(self, x, y, variables):
-        """
-        Forward pass for ClimaXPH.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape `[B, V, H, W]`.
-            y (torch.Tensor): Target tensor of shape `[B]`.
-            lead_times (torch.Tensor): Lead times tensor of shape `[B]`.
-            variables (list): List of variable names.
-            metric (list): List of metric functions.
-            lat (torch.Tensor): Latitude tensor.
-
-        Returns:
-            loss (list): Computed loss values.
-            preds (torch.Tensor): Predictions of shape `[B]`.
-        """
-
         lead_times = self.construct_lead_time_tensor(x)
-        out_transformers = self.forward_encoder(
-            x, lead_times, variables
-        )  # B, L, D
 
-        # Pool over sequence length
-        # x = out_transformers.mean(dim=1)  # B, D
-        # Pass through the head
-        preds = self.spatial_head(out_transformers)  # B, L, V*p*p
+        # Encoder
+        x = self.forward_encoder(x, lead_times, variables)
 
+        # Processor
+        x = self.forward_processor(x)
+
+        # Decoder
+        preds = self.spatial_head(x)
         preds = self.unpatchify(preds)
-
         return preds
 
     def unpatchify(self, x: torch.Tensor):

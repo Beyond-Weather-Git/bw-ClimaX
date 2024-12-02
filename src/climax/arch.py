@@ -221,11 +221,54 @@ class ClimaX(nn.Module):
         x = x.unflatten(dim=0, sizes=(b, l))  # B, L, D
         return x
 
+    # def forward_encoder(
+    #     self, x: torch.Tensor, lead_times: torch.Tensor, variables
+    # ):
+    #     # x: `[B, V, H, W]` shape.
+
+    #     if isinstance(variables, list):
+    #         variables = tuple(variables)
+
+    #     # tokenize each variable separately
+    #     embeds = []
+    #     var_ids = self.get_var_ids(variables, x.device)
+
+    #     if self.parallel_patch_embed:
+    #         x = self.token_embeds(x, var_ids)  # B, V, L, D
+    #     else:
+    #         for i in range(len(var_ids)):
+    #             id = var_ids[i]
+    #             embeds.append(self.token_embeds[id](x[:, i : i + 1]))
+    #         x = torch.stack(embeds, dim=1)  # B, V, L, D
+
+    #     # add variable embedding
+    #     var_embed = self.get_var_emb(self.var_embed, variables)
+    #     x = x + var_embed.unsqueeze(2)  # B, V, L, D
+
+    #     # variable aggregation
+    #     x = self.aggregate_variables(x)  # B, L, D
+
+    #     # add pos embedding
+    #     x = x + self.pos_embed
+
+    #     # add lead time embedding using self.lead_time
+    #     # breakpoint()
+    #     lead_times = lead_times.to(x.device)
+    #     lead_time_emb = self.lead_time_embed(lead_times.unsqueeze(-1))  # B, D
+    #     lead_time_emb = lead_time_emb.unsqueeze(1)
+    #     x = x + lead_time_emb  # B, L, D
+
+    #     x = self.pos_drop(x)
+
+    #     # apply Transformer blocks
+    #     for blk in self.blocks:
+    #         x = blk(x)
+    #     x = self.norm(x)
+
+    #     return x
     def forward_encoder(
         self, x: torch.Tensor, lead_times: torch.Tensor, variables
     ):
-        # x: `[B, V, H, W]` shape.
-
         if isinstance(variables, list):
             variables = tuple(variables)
 
@@ -251,8 +294,7 @@ class ClimaX(nn.Module):
         # add pos embedding
         x = x + self.pos_embed
 
-        # add lead time embedding using self.lead_time
-        # breakpoint()
+        # add lead time embedding
         lead_times = lead_times.to(x.device)
         lead_time_emb = self.lead_time_embed(lead_times.unsqueeze(-1))  # B, D
         lead_time_emb = lead_time_emb.unsqueeze(1)
@@ -260,40 +302,68 @@ class ClimaX(nn.Module):
 
         x = self.pos_drop(x)
 
+        return x
+
+    def forward_processor(self, x):
         # apply Transformer blocks
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
 
+        # apply all head layers except the last one
+        for layer in self.head[:-1]:
+            x = layer(x)
+
         return x
 
-    def construct_lead_time_tensor(self, x):
+    def forward_decoder(self, x):
+        # apply only the last layer of the head
+        x = self.head[-1](x)  # B, L, V*p*p
+        return x
 
+    def forward(self, x, y, variables):
+        lead_times = self.construct_lead_time_tensor(x)
+
+        # Encoder
+        x = self.forward_encoder(x, lead_times, variables)
+
+        # Processor
+        x = self.forward_processor(x)
+
+        # Decoder
+        preds = self.forward_decoder(x)
+
+        preds = self.unpatchify(preds)
+        out_var_ids = self.get_var_ids(tuple(variables), preds.device)
+        preds = preds[:, out_var_ids]
+        return preds
+
+    def construct_lead_time_tensor(self, x):
         lead_times = torch.FloatTensor(
             [self.lead_time for _ in range(x.shape[0])]
         ).to(x.device)
         return lead_times
 
-    def forward(self, x, y, variables):
-        """Forward pass through the model.
+    # def forward(self, x, y, variables):
+    #     """Forward pass through the model.
 
-        Args:
-            x: `[B, Vi, H, W]` shape. Input weather/climate variables
-            y: `[B, Vo, H, W]` shape. Target weather/climate variables
-            lead_times: `[B]` shape. Forecasting lead times of each element of the batch.
+    #     Args:
+    #         x: `[B, Vi, H, W]` shape. Input weather/climate variables
+    #         y: `[B, Vo, H, W]` shape. Target weather/climate variables
+    #         lead_times: `[B]` shape. Forecasting lead times of each element of the batch.
 
-        Returns:
-            preds (torch.Tensor): `[B, Vo, H, W]` shape. Predicted weather/climate variables.
-        """
+    #     Returns:
+    #         preds (torch.Tensor): `[B, Vo, H, W]` shape. Predicted weather/climate variables.
+    #     """
 
-        lead_times = self.construct_lead_time_tensor(x)
-        out_transformers = self.forward_encoder(
-            x, lead_times, variables
-        )  # B, L, D
-        preds = self.head(out_transformers)  # B, L, V*p*p
+    #     lead_times = self.construct_lead_time_tensor(x)
+    #     out_transformers = self.forward_encoder(
+    #         x, lead_times, variables
+    #     )  # B, L, D
+    #     preds = self.head(out_transformers)  # B, L, V*p*p
 
-        preds = self.unpatchify(preds)
-        out_var_ids = self.get_var_ids(tuple(variables), preds.device)
-        preds = preds[:, out_var_ids]
+    #     preds = self.unpatchify(preds)
+    #     out_var_ids = self.get_var_ids(tuple(variables), preds.device)
+    #     preds = preds[:, out_var_ids]
 
-        return preds
+    #     return preds
