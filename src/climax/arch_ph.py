@@ -62,7 +62,7 @@ class ClimaXPH(ClimaX):
         reduced_dim = 4
         self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
         unrolled_dim = self.num_patches * reduced_dim
-        self.predictive_head = nn.Sequential(
+        self.scalar_head = nn.Sequential(
             nn.Linear(unrolled_dim, unrolled_dim // 2),
             nn.GELU(),
             nn.Linear(unrolled_dim // 2, unrolled_dim // 4),
@@ -97,7 +97,9 @@ class ClimaXPH(ClimaX):
         """
 
         lead_times = self.construct_lead_time_tensor(x)
-        out_transformers = self.forward_encoder(x, lead_times, variables)  # B, L, D
+        out_transformers = self.forward_encoder(
+            x, lead_times, variables
+        )  # B, L, D
 
         # Pool over sequence length
         # x = out_transformers.mean(dim=1)  # B, D
@@ -106,7 +108,7 @@ class ClimaXPH(ClimaX):
         # Unroll
         unrolled = reduced.reshape(reduced.shape[0], -1)  # B, L*reduced_dim
         # Pass through the head
-        preds = self.predictive_head(unrolled).squeeze()
+        preds = self.scalar_head(unrolled).squeeze()
         # preds = self.head(x).squeeze(-1)  # B
 
         return preds

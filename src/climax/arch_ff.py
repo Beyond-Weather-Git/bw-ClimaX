@@ -63,12 +63,12 @@ class ClimaXFF(ClimaX):
         self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
         unrolled_dim = self.num_patches * reduced_dim
 
-        self.head = nn.ModuleList()
+        head = nn.ModuleList()
         for _ in range(decoder_depth):
-            self.head.append(nn.Linear(embed_dim, embed_dim))
-            self.head.append(nn.GELU())
-        self.head.append(nn.Linear(embed_dim, patch_size**2))
-        self.head = nn.Sequential(*self.head)
+            head.append(nn.Linear(embed_dim, embed_dim))
+            head.append(nn.GELU())
+        head.append(nn.Linear(embed_dim, patch_size**2))
+        self.spatial_head = nn.Sequential(*self.head)
         self.apply(self._init_weights)
         self.lead_time = lead_time
 
@@ -101,7 +101,7 @@ class ClimaXFF(ClimaX):
         # Unroll
         unrolled = reduced.reshape(reduced.shape[0], -1)  # B, L*reduced_dim
         # Pass through the head
-        preds = self.head(out_transformers)  # B, L, V*p*p
+        preds = self.spatial_head(out_transformers)  # B, L, V*p*p
 
         preds = self.unpatchify(preds)
 
