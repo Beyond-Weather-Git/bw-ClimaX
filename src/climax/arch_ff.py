@@ -42,6 +42,7 @@ class ClimaXFF(ClimaX):
         drop_rate=0.1,
         parallel_patch_embed=False,
         lead_time=None,
+        target_config=None,
     ):
         super().__init__(
             default_vars=default_vars,
@@ -55,58 +56,47 @@ class ClimaXFF(ClimaX):
             drop_path=drop_path,
             drop_rate=drop_rate,
             parallel_patch_embed=parallel_patch_embed,
+            target_config=target_config,
         )
 
         # Redefine the prediction head to output a single value
         # self.head = nn.ModuleList()
-        reduced_dim = 4
-        self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
-        unrolled_dim = self.num_patches * reduced_dim
+        self.init_ff_head(target_config, embed_dim, decoder_depth, patch_size)
+        self.apply(self._init_weights)
+        self.lead_time = lead_time
+
+    def init_ff_head(
+        self, target_config, embed_dim, decoder_depth, patch_size
+    ):
+        # reduced_dim = 4
+        # self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
 
         head = nn.ModuleList()
         for _ in range(decoder_depth):
             head.append(nn.Linear(embed_dim, embed_dim))
             head.append(nn.GELU())
-        head.append(nn.Linear(embed_dim, patch_size**2))
+        head.append(
+            nn.Linear(embed_dim, len(target_config.variables) * patch_size**2)
+        )
         self.spatial_head = nn.Sequential(*head)
-        self.apply(self._init_weights)
-        self.lead_time = lead_time
 
-    def forward(self, x, y, variables):
-        lead_times = self.construct_lead_time_tensor(x)
+    def forward_head(self, x, variables):
+        x = self.spatial_head(x)
+        x = self.unpatchify(x)
+        return x
 
-        # Encoder
-        x = self.forward_encoder(x, lead_times, variables)
-
-        # Processor
-        x = self.forward_processor(x)
-
-        # Decoder
-        preds = self.spatial_head(x)
-        preds = self.unpatchify(preds)
-        return preds
-
-    def unpatchify(self, x: torch.Tensor):
+    def unpatchify(self, x: torch.Tensor, h=None, w=None):
         """
-        Convert patchified tensor back to spatial tensor for single-field output.
-
-        Args:
-            x: Tensor of shape `[B, L, patch_size**2]`.
-
-        Returns:
-            imgs: Tensor of shape `[B, 1, H, W]`.
+        x: (B, L, V * patch_size**2)
+        return imgs: (B, V, H, W)
         """
-        p = self.patch_size  # Patch size
-        B, L, _ = x.shape
-        H = self.img_size[0] // p
-        W = self.img_size[1] // p
+        p = self.patch_size
+        c = len(self.target_config.variables)
+        h = self.img_size[0] // p if h is None else h // p
+        w = self.img_size[1] // p if w is None else w // p
+        assert h * w == x.shape[1]
 
-        # Ensure L matches H * W
-        assert H * W == L, f"Expected L={H * W}, but got L={L}"
-
-        # Reshape x into `[B, H, W, p, p]`
-        x = x.reshape(B, H, W, p, p)
-
-        # Rearrange into `[B, 1, H*p, W*p]`
-        imgs = x.permute(0, 3, 4, 1, 2).reshape(B, 1, H * p, W * p)
+        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
+        x = torch.einsum("nhwpqc->nchpwq", x)
+        imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return imgs

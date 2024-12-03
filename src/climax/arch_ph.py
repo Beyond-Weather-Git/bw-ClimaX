@@ -56,9 +56,6 @@ class ClimaXPH(ClimaX):
             drop_rate=drop_rate,
             parallel_patch_embed=parallel_patch_embed,
         )
-
-        # Redefine the prediction head to output a single value
-        # self.head = nn.ModuleList()
         reduced_dim = 4
         self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
         unrolled_dim = self.num_patches * reduced_dim
@@ -79,7 +76,7 @@ class ClimaXPH(ClimaX):
         self.apply(self._init_weights)
         self.lead_time = lead_time
 
-    def forward(self, x, y, variables):
+    def forward_head(self, x, variables):
         """
         Forward pass for ClimaXPH.
 
@@ -95,20 +92,8 @@ class ClimaXPH(ClimaX):
             loss (list): Computed loss values.
             preds (torch.Tensor): Predictions of shape `[B]`.
         """
-
-        lead_times = self.construct_lead_time_tensor(x)
-        out_transformers = self.forward_encoder(
-            x, lead_times, variables
-        )  # B, L, D
-
-        # Pool over sequence length
-        # x = out_transformers.mean(dim=1)  # B, D
-        reduced = self.dim_reduce(out_transformers)  # B, L, reduced_dim
-
-        # Unroll
-        unrolled = reduced.reshape(reduced.shape[0], -1)  # B, L*reduced_dim
-        # Pass through the head
-        preds = self.scalar_head(unrolled).squeeze()
-        # preds = self.head(x).squeeze(-1)  # B
-
-        return preds
+        # Encoder
+        x = self.dim_reduce(x)  # B, L, reduced_dim
+        unrolled = x.reshape(x.shape[0], -1)  # B, L*reduced_dim
+        x = self.scalar_head(unrolled).squeeze()
+        return x
