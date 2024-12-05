@@ -42,6 +42,7 @@ class ClimaXPH(ClimaX):
         drop_rate=0.1,
         parallel_patch_embed=False,
         lead_time=None,
+        target_config=None,
     ):
         super().__init__(
             default_vars=default_vars,
@@ -55,6 +56,7 @@ class ClimaXPH(ClimaX):
             drop_path=drop_path,
             drop_rate=drop_rate,
             parallel_patch_embed=parallel_patch_embed,
+            target_config=target_config,
         )
         reduced_dim = 4
         self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
