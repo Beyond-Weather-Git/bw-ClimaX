@@ -21,7 +21,7 @@ import torch.nn as nn
 from climax.arch import ClimaX
 
 
-class ClimaXPH(ClimaX):
+class ClimaXFF(ClimaX):
     """
     ClimaXPH is a variant of ClimaX designed for point-wise prediction tasks.
     It inherits from ClimaX and modifies the prediction head and forward method
@@ -58,44 +58,45 @@ class ClimaXPH(ClimaX):
             parallel_patch_embed=parallel_patch_embed,
             target_config=target_config,
         )
-        reduced_dim = 4
-        self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
-        unrolled_dim = self.num_patches * reduced_dim
-        self.scalar_head = nn.Sequential(
-            nn.Linear(unrolled_dim, unrolled_dim // 2),
-            nn.GELU(),
-            nn.Linear(unrolled_dim // 2, unrolled_dim // 4),
-            nn.GELU(),
-            nn.Linear(unrolled_dim // 4, 1),
-        )
 
-        # for _ in range(decoder_depth):
-        #     self.head.append(nn.Linear(embed_dim, embed_dim))
-        #     self.head.append(nn.GELU()
-        # )
-        # self.head.append(nn.Linear(embed_dim, 1))  # Output dimension is 1
-        # self.head = nn.Sequential(*self.head)
+        # Redefine the prediction head to output a single value
+        # self.head = nn.ModuleList()
+        self.init_ff_head(target_config, embed_dim, decoder_depth, patch_size)
         self.apply(self._init_weights)
         self.lead_time = lead_time
 
+    def init_ff_head(
+        self, target_config, embed_dim, decoder_depth, patch_size
+    ):
+        # reduced_dim = 4
+        # self.dim_reduce = nn.Linear(embed_dim, reduced_dim)
+
+        head = nn.ModuleList()
+        for _ in range(decoder_depth):
+            head.append(nn.Linear(embed_dim, embed_dim))
+            head.append(nn.GELU())
+        head.append(
+            nn.Linear(embed_dim, len(target_config.variables) * patch_size**2)
+        )
+        self.spatial_head = nn.Sequential(*head)
+
     def forward_head(self, x, variables):
-        """
-        Forward pass for ClimaXPH.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape `[B, V, H, W]`.
-            y (torch.Tensor): Target tensor of shape `[B]`.
-            lead_times (torch.Tensor): Lead times tensor of shape `[B]`.
-            variables (list): List of variable names.
-            metric (list): List of metric functions.
-            lat (torch.Tensor): Latitude tensor.
-
-        Returns:
-            loss (list): Computed loss values.
-            preds (torch.Tensor): Predictions of shape `[B]`.
-        """
-        # Encoder
-        x = self.dim_reduce(x)  # B, L, reduced_dim
-        unrolled = x.reshape(x.shape[0], -1)  # B, L*reduced_dim
-        x = self.scalar_head(unrolled).squeeze()
+        x = self.spatial_head(x)
+        x = self.unpatchify(x)
         return x
+
+    def unpatchify(self, x: torch.Tensor, h=None, w=None):
+        """
+        x: (B, L, V * patch_size**2)
+        return imgs: (B, V, H, W)
+        """
+        p = self.patch_size
+        c = len(self.target_config.variables)
+        h = self.img_size[0] // p if h is None else h // p
+        w = self.img_size[1] // p if w is None else w // p
+        assert h * w == x.shape[1]
+
+        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
+        x = torch.einsum("nhwpqc->nchpwq", x)
+        imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
+        return imgs

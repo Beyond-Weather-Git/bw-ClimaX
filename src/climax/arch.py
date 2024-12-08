@@ -48,6 +48,7 @@ class ClimaX(nn.Module):
         drop_rate=0.1,
         parallel_patch_embed=False,
         lead_time=None,
+        target_config=None,
     ):
         super().__init__()
 
@@ -56,6 +57,7 @@ class ClimaX(nn.Module):
         self.patch_size = patch_size
         self.default_vars = default_vars
         self.parallel_patch_embed = parallel_patch_embed
+        self.target_config = target_config
         # variable tokenization: separate embedding layer for each input variable
         if self.parallel_patch_embed:
             self.token_embeds = ParallelVarPatchEmbed(
@@ -76,15 +78,19 @@ class ClimaX(nn.Module):
         self.var_embed, self.var_map = self.create_var_embedding(embed_dim)
         self.lead_time = lead_time
         # variable aggregation: a learnable query and a single-layer cross attention
-        self.var_query = nn.Parameter(torch.zeros(1, 1, embed_dim), requires_grad=True)
-        self.var_agg = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.var_query = nn.Parameter(
+            torch.zeros(1, 1, embed_dim), requires_grad=True
+        )
+        self.var_agg = nn.MultiheadAttention(
+            embed_dim, num_heads, batch_first=True
+        )
 
         # positional embedding and lead time embedding
         self.pos_embed = nn.Parameter(
             torch.zeros(1, self.num_patches, embed_dim), requires_grad=True
         )
         self.lead_time_embed = nn.Linear(1, embed_dim)
-
+        self.lead_time = lead_time
         # --------------------------------------------------------------------------
 
         # ViT backbone
@@ -115,7 +121,9 @@ class ClimaX(nn.Module):
         for _ in range(decoder_depth):
             self.head.append(nn.Linear(embed_dim, embed_dim))
             self.head.append(nn.GELU())
-        self.head.append(nn.Linear(embed_dim, len(self.default_vars) * patch_size**2))
+        self.head.append(
+            nn.Linear(embed_dim, len(self.default_vars) * patch_size**2)
+        )
         self.head = nn.Sequential(*self.head)
 
         # --------------------------------------------------------------------------
@@ -130,12 +138,16 @@ class ClimaX(nn.Module):
             int(self.img_size[1] / self.patch_size),
             cls_token=False,
         )
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        self.pos_embed.data.copy_(
+            torch.from_numpy(pos_embed).float().unsqueeze(0)
+        )
 
         var_embed = get_1d_sincos_pos_embed_from_grid(
             self.var_embed.shape[-1], np.arange(len(self.default_vars))
         )
-        self.var_embed.data.copy_(torch.from_numpy(var_embed).float().unsqueeze(0))
+        self.var_embed.data.copy_(
+            torch.from_numpy(var_embed).float().unsqueeze(0)
+        )
 
         # token embedding layer
         if self.parallel_patch_embed:
@@ -167,7 +179,6 @@ class ClimaX(nn.Module):
         var_map = {}
         idx = 0
         for var in self.default_vars:
-            print(var)
             var_map[var] = idx
             idx += 1
         return var_embed, var_map
@@ -212,9 +223,8 @@ class ClimaX(nn.Module):
         x = x.unflatten(dim=0, sizes=(b, l))  # B, L, D
         return x
 
-    def forward_encoder(self, x: torch.Tensor, lead_times: torch.Tensor, variables):
-        # x: `[B, V, H, W]` shape.
-
+    def forward_encoder(self, x: torch.Tensor, variables):
+        lead_times = self.construct_lead_time_tensor(x)
         if isinstance(variables, list):
             variables = tuple(variables)
 
@@ -240,67 +250,50 @@ class ClimaX(nn.Module):
         # add pos embedding
         x = x + self.pos_embed
 
-        # add lead time embedding using self.lead_time
-        lead_times = torch.Tensor([self.lead_time for _ in range(len(lead_times))]).to(
-            x.device
-        )
+        # add lead time embedding
+        lead_times = lead_times.to(x.device)
         lead_time_emb = self.lead_time_embed(lead_times.unsqueeze(-1))  # B, D
         lead_time_emb = lead_time_emb.unsqueeze(1)
         x = x + lead_time_emb  # B, L, D
 
         x = self.pos_drop(x)
 
+        return x
+
+    def forward_processor(self, x, variables):
         # apply Transformer blocks
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
 
+        # apply all head layers except the last one
+        for layer in self.head[:-1]:
+            x = layer(x)
+
         return x
 
-    def forward(self, x, y, lead_times, variables, metric, lat):
-        """Forward pass through the model.
+    def forward_head(self, x, variables):
+        # apply only the last layer of the head
+        x = self.head[-1](x)  # B, L, V*p*p
+        x = self.unpatchify(x)
+        out_var_ids = self.get_var_ids(tuple(variables), x.device)
+        x = x[:, out_var_ids]
+        return x
 
-        Args:
-            x: `[B, Vi, H, W]` shape. Input weather/climate variables
-            y: `[B, Vo, H, W]` shape. Target weather/climate variables
-            lead_times: `[B]` shape. Forecasting lead times of each element of the batch.
+    def forward(self, x, y, variables):
+        # Encoder
+        x = self.forward_encoder(x, variables)
 
-        Returns:
-            loss (list): Different metrics.
-            preds (torch.Tensor): `[B, Vo, H, W]` shape. Predicted weather/climate variables.
-        """
-        lead_times = lead_times.to(x.device)
-        out_transformers = self.forward_encoder(x, lead_times, variables)  # B, L, D
-        preds = self.head(out_transformers)  # B, L, V*p*p
+        # Processor
+        x = self.forward_processor(x, variables)
 
-        preds = self.unpatchify(preds)
-        out_var_ids = self.get_var_ids(tuple(variables), preds.device)
-        preds = preds[:, out_var_ids]
+        # Decoder
+        preds = self.forward_head(x, variables)
 
-        if metric is None:
-            loss = None
-        else:
-            loss = [m(preds, y, variables, lat) for m in metric]
+        return preds
 
-        return loss, preds
-
-    def evaluate(
-        self,
-        x,
-        y,
-        lead_times,
-        variables,
-        metrics,
-        lat,
-    ):
-        _, preds = self.forward(x, y, lead_times, variables, metric=None, lat=lat)
-
-        return [
-            m(
-                preds,
-                y,
-                variables,
-                lat,
-            )
-            for m in metrics
-        ]
+    def construct_lead_time_tensor(self, x):
+        lead_times = torch.FloatTensor(
+            [self.lead_time for _ in range(x.shape[0])]
+        ).to(x.device)
+        return lead_times

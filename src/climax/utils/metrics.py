@@ -4,6 +4,26 @@
 import numpy as np
 import torch
 from scipy import stats
+from torch import nn
+
+
+def bce(pred, y, vars, lat=None, mask=None):
+    """Binary Cross-Entropy loss with logits
+
+    Args:
+        pred (torch.Tensor): Predicted logits of shape [B]
+        y (torch.Tensor): Target tensor of shape [B, ].
+        vars (list): List of variable names.
+        lat (torch.Tensor, optional): Latitude tensor (not used here).
+        mask (torch.Tensor, optional): Mask tensor of shape (not used)
+
+    Returns:
+        dict: Dictionary containing per-variable losses and the overall loss.
+    """
+    loss_fn = nn.BCEWithLogitsLoss()
+    loss = loss_fn(pred, y)
+
+    return {"loss": loss}
 
 
 def mse(pred, y, vars, lat=None, mask=None):
