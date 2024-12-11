@@ -76,7 +76,7 @@ class ClimaXPH(ClimaX):
         # )
         # self.head.append(nn.Linear(embed_dim, 1))  # Output dimension is 1
         # self.head = nn.Sequential(*self.head)
-        self.apply(self._init_weights)
+        # self.apply(self._init_weights)
         self.lead_time = lead_time
 
     def forward(self, x, y, variables):
@@ -97,7 +97,9 @@ class ClimaXPH(ClimaX):
         """
 
         lead_times = self.construct_lead_time_tensor(x)
-        out_transformers = self.forward_encoder(x, lead_times, variables)  # B, L, D
+        out_transformers = self.forward_encoder(
+            x, lead_times, variables
+        )  # B, L, D
 
         # Pool over sequence length
         # x = out_transformers.mean(dim=1)  # B, D
